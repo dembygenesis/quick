@@ -6,6 +6,13 @@ package main
 // Each lesson is a pair of files: NN_name.go (read this) + NN_name_test.go
 // (run this). Lessons build on each other. Go in order.
 //
+// HOW TO STUDY EACH LESSON (10 min each)
+//   1. Read the big comment at the top of NN_name.go. It's a story + JS version.
+//   2. Read the code under it.
+//   3. Run its test with -v and watch it pass.
+//   4. Break something on purpose (delete a Lock, a Wait, a close) and re-run
+//      with -race. Seeing it fail teaches more than seeing it pass.
+//
 //	01_goroutines_waitgroup   run work in parallel, wait for all
 //	02_channels               get results back without a shared slice
 //	03_mutex                  many goroutines, ONE wallet
@@ -32,11 +39,12 @@ package main
 //	context.Context              AbortController + signal (cancel / deadline)
 //	sync.Mutex                   async-mutex (Node needs it far less: 1 thread)
 //	return val, err              throw / try-catch (Go has NO exceptions)
-//	interface{ Foo() }           TS structural interface, no `implements` keyword
+//	interface{ Foo() }           TS interface, but any type with a Foo() method
+//	                             counts automatically (no `implements` keyword)
 //	struct + methods             class (no inheritance; compose instead)
-//	panic / recover              uncaught throw / catch, for real bugs only
-//	nil map write                TypeError, but at runtime
-//	zero values (0, "", nil)     undefined, but typed and always initialised
+//	panic / recover              an uncaught throw. Only for real bugs, not normal errors
+//	zero values (0, "", nil)     like undefined, but every type has a safe default:
+//	                             int is 0, string is "", pointer/map/slice is nil
 //
 // KEY DIFFERENCE: Node = one thread + event loop, so data races mostly cannot
 // happen. Go = real parallelism, so shared memory needs locks or channels.
@@ -52,9 +60,11 @@ var (
 	ErrTxDone            = errors.New("tx already committed or rolled back")
 )
 
-// Transferer is what lessons 06 and 07 both offer: same behaviour, two designs.
-// JS analogy: a TS interface. Any type with these two methods qualifies; there
-// is no `implements`. That is called structural typing.
+// Transferer is a promise of "I can Transfer and tell you a Balance".
+// Lessons 06 and 07 both keep that promise in different ways (locks vs owner
+// goroutine), so the same tests run against both.
+// JS analogy: a TS interface. Any type with these two methods counts; no
+// `implements` keyword needed.
 type Transferer interface {
 	Transfer(from, to, amount int64) error
 	Balance(id int64) (int64, error)

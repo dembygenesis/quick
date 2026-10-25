@@ -9,7 +9,9 @@ import (
 )
 
 // mustFinish fails the test instead of hanging forever if fn deadlocks.
-// select waits on whichever channel fires first.
+// Why: a deadlock (lesson 6) doesn't crash, it just hangs, and a hung test is
+// miserable. This races the work against a timer and fails if the timer wins.
+// select = "wait for whichever of these channels fires first".
 // JS analogy: await Promise.race([fn(), timeout(d)]).
 func mustFinish(t *testing.T, d time.Duration, fn func()) {
 	t.Helper()
@@ -65,8 +67,10 @@ func runTransferCases(t *testing.T, newBank newTransferer) {
 	}
 }
 
-// Ring of transfers 1->2, 2->3, 3->1 plus the reverse, all at once.
-// Without lock ordering this is the textbook deadlock; mustFinish catches it.
+// Fires hundreds of transfers at once in a circle (1->2, 2->3, 3->1) and the
+// reverse circle. Every transfer has an opposite one, so every wallet must end
+// with exactly what it started with. If lock ordering were wrong, this would
+// deadlock and mustFinish would fail the test instead of hanging.
 func runConcurrentRing(t *testing.T, newBank newTransferer) {
 	tests := []struct {
 		name   string

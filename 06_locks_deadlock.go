@@ -3,40 +3,57 @@ package main
 import "sync"
 
 // ---------------------------------------------------------------------------
-// Step 6: per-wallet locks + deadlock avoidance
+// LESSON 6: one lock per wallet, and the DEADLOCK trap
 //
-// Step 5 used ONE lock for the whole bank: correct, but every transfer waits
-// for every other. Real systems lock per row (Postgres: SELECT ... FOR UPDATE),
-// so unrelated transfers run in parallel.
+// THE STORY
+//   Lesson 5 used ONE lock for the whole bank. Safe, but if Alice pays Bob,
+//   Carol has to wait in line even though she's not involved. Better: one
+//   lock PER wallet, so unrelated transfers run at the same time.
+//   (Postgres does this with row locks: SELECT ... FOR UPDATE.)
 //
-// New danger: a transfer needs TWO locks.
+// THE NEW DANGER: a transfer needs TWO locks (sender's and receiver's)
 //
-//	A -> B locks A, then wants B
-//	B -> A locks B, then wants A    => each holds what the other needs. Deadlock.
+//   Alice -> Bob: grabs Alice's lock, then waits for Bob's lock.
+//   Bob -> Alice: grabs Bob's lock,   then waits for Alice's lock.
 //
-// Fix: every transfer takes locks in the same global order (lowest id first).
-// Then nobody can hold the higher lock while waiting on the lower one.
-// In SQL this is: SELECT ... WHERE id IN ($1,$2) ORDER BY id FOR UPDATE.
+//   Each is holding the key the other one needs. Both wait forever.
+//   That's a DEADLOCK. Two people each holding one chopstick, each waiting
+//   for the other's. Nobody moves, no error, the program just hangs.
 //
-// JS ANALOGY
-//   Node can deadlock too, just rarely, when you use async locks:
-//       await lockA.acquire(); await lockB.acquire();   // request 1
-//       await lockB.acquire(); await lockA.acquire();   // request 2: waits forever
-//   Same cure in both languages: always acquire locks in one agreed order.
-//   Per-wallet locks ~ a Map<walletId, Mutex>, so transfers on different
-//   wallets don't queue behind each other.
+// THE FIX: everyone grabs locks in the SAME ORDER
+//   Always lock the LOWER wallet id first, no matter who's sending.
+//   Now both Alice->Bob and Bob->Alice try Alice's lock first. One wins, the
+//   other waits, and nobody holds a lock the other needs. No circle, no hang.
+//   (In SQL: ... WHERE id IN ($1,$2) ORDER BY id FOR UPDATE)
 //
-// INTERVIEW LINE: "Deadlock needs circular wait. I break the circle by
-// ordering lock acquisition, here by wallet id. Same as ORDER BY id FOR UPDATE."
+// JS HAS THIS TOO, JUST RARELY
+//   await lockA.acquire(); await lockB.acquire();   // request 1
+//   await lockB.acquire(); await lockA.acquire();   // request 2: waits forever
+//   Same cure: agree on one order. Think of `locks` as a Map<walletId, Mutex>.
+//
+// ANOTHER TRAP HANDLED BELOW
+//   from == to would lock the same lock twice and freeze on yourself. So we
+//   reject it up front.
+//
+// WORDS YOU'LL HEAR
+//   deadlock       everyone's waiting on someone else; nothing ever moves
+//   lock ordering  the "always lowest id first" trick
+//
+// SAY THIS IN THE INTERVIEW
+//   "Deadlock happens when goroutines wait on each other in a circle. I break
+//   the circle by always acquiring locks in a consistent order, like sorting
+//   by id."
 // ---------------------------------------------------------------------------
 
 type lockedWallet struct {
-	mu      sync.Mutex
+	mu      sync.Mutex // this wallet's own lock
 	balance int64
 }
 
 type LockedBank struct {
-	wallets map[int64]*lockedWallet // built once, never mutated: safe to read unlocked
+	// Built once at the start and never added to later, so reading the map
+	// itself needs no lock. Only each wallet's balance needs its lock.
+	wallets map[int64]*lockedWallet
 }
 
 func NewLockedBank(balances map[int64]int64) *LockedBank {
@@ -62,7 +79,7 @@ func (lb *LockedBank) Transfer(from, to, amount int64) error {
 		return ErrInvalidAmount
 	}
 	if from == to {
-		return ErrSameWallet // would Lock the same mutex twice: instant self-deadlock
+		return ErrSameWallet // locking the same lock twice would freeze us
 	}
 	src, ok := lb.wallets[from]
 	dst, ok2 := lb.wallets[to]
@@ -70,15 +87,17 @@ func (lb *LockedBank) Transfer(from, to, amount int64) error {
 		return ErrWalletNotFound
 	}
 
+	// THE TRICK: lock the lower id first, whichever direction the money goes.
 	first, second := src, dst
 	if from > to {
-		first, second = dst, src // lock the lower id first, whatever the direction
+		first, second = dst, src
 	}
 	first.mu.Lock()
 	defer first.mu.Unlock()
 	second.mu.Lock()
 	defer second.mu.Unlock()
 
+	// Both wallets are ours now. Check and move, safely.
 	if src.balance < amount {
 		return ErrInsufficientFunds
 	}
