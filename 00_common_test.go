@@ -8,11 +8,8 @@ import (
 	"time"
 )
 
-// mustFinish fails the test instead of hanging forever if fn deadlocks.
-// Why: a deadlock (lesson 6) doesn't crash, it just hangs, and a hung test is
-// miserable. This races the work against a timer and fails if the timer wins.
-// select = "wait for whichever of these channels fires first".
-// JS analogy: await Promise.race([fn(), timeout(d)]).
+// mustFinish fails the test if fn hangs (a deadlock hangs, it does not crash).
+// JS: await Promise.race([fn(), timeout(d)])
 func mustFinish(t *testing.T, d time.Duration, fn func()) {
 	t.Helper()
 
@@ -29,7 +26,7 @@ func mustFinish(t *testing.T, d time.Duration, fn func()) {
 	}
 }
 
-// newTransferer builds a bank for lessons 06 and 07, which share one contract.
+// lessons 06 and 07 share one contract, so they share these tests
 type newTransferer func(t *testing.T, balances map[int64]int64) Transferer
 
 func runTransferCases(t *testing.T, newBank newTransferer) {
@@ -67,10 +64,8 @@ func runTransferCases(t *testing.T, newBank newTransferer) {
 	}
 }
 
-// Fires hundreds of transfers at once in a circle (1->2, 2->3, 3->1) and the
-// reverse circle. Every transfer has an opposite one, so every wallet must end
-// with exactly what it started with. If lock ordering were wrong, this would
-// deadlock and mustFinish would fail the test instead of hanging.
+// Hundreds of transfers in a circle and back. Each wallet must end where it started.
+// Wrong lock order would deadlock; mustFinish catches that.
 func runConcurrentRing(t *testing.T, newBank newTransferer) {
 	tests := []struct {
 		name   string
